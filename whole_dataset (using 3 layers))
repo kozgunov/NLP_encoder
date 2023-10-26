@@ -1,0 +1,117 @@
+import json
+import torch
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.model_selection import train_test_split
+from transformers import BertTokenizer, BertForSequenceClassification, AdamW
+from torch.utils.data import DataLoader, Dataset
+from torch.optim import AdamW
+from transformers import get_linear_schedule_with_warmup
+
+# Load dataset
+with open('train.json', 'r', encoding='utf-8') as file:
+    data = json.load(file)
+
+# Preprocess dataset
+texts = [item['text'] for item in data]
+labels = [item['sentiment'] for item in data]
+label_dict = {'positive': 0, 'neutral': 1, 'negative': 2}
+labels = [label_dict[label] for label in labels]
+
+# Split dataset
+train_texts, val_texts, train_labels, val_labels = train_test_split(texts, labels, test_size=0.2, random_state=42)
+
+# Tokenize text data
+tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased')
+train_encodings = tokenizer(train_texts, truncation=True, padding=True, max_length=512)
+val_encodings = tokenizer(val_texts, truncation=True, padding=True, max_length=512)
+
+
+# Create custom dataset
+class SentimentDataset(Dataset):
+    def __init__(self, encodings, labels):
+        self.encodings = encodings
+        self.labels = labels
+
+    def __getitem__(self, idx):
+        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+        item['labels'] = torch.tensor(self.labels[idx])
+        return item
+
+    def __len__(self):
+        return len(self.labels)
+
+
+train_dataset = SentimentDataset(train_encodings, train_labels)
+val_dataset = SentimentDataset(val_encodings, val_labels)
+
+# Load pre-trained BERT model
+model = BertForSequenceClassification.from_pretrained('bert-base-multilingual-cased', num_labels=3)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+
+# Fine-tune BERT model
+train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=8)
+
+optimizer = AdamW(model.parameters(), lr=1e-5)
+
+# Training loop
+num_epochs = 3
+best_val_accuracy = 0
+for epoch in range(num_epochs):
+    model.train()
+    total_loss = 0
+    for batch in train_loader:
+        optimizer.zero_grad()
+        inputs = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
+        labels = batch['labels'].to(device)
+        outputs = model(**inputs, labels=labels)
+        loss = outputs.loss
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    print(f"Epoch {epoch + 1}, Loss: {total_loss / len(train_loader)}")
+
+    # Validation loop
+    model.eval()
+    predictions = []
+    true_labels = []
+    with torch.no_grad():
+        for batch in val_loader:
+            inputs = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
+            labels = batch['labels'].to(device)
+            outputs = model(**inputs)
+            preds = torch.argmax(outputs.logits, dim=1)
+            predictions.extend(preds.cpu().numpy())
+            true_labels.extend(labels.cpu().numpy())
+
+    val_accuracy = accuracy_score(true_labels, predictions)
+    if val_accuracy > best_val_accuracy:
+        best_val_accuracy = val_accuracy
+        torch.save(model.state_dict(), 'best_model.pth')
+
+    print(f"Validation Accuracy: {val_accuracy}")
+
+# Evaluation on best model
+model.load_state_dict(torch.load('best_model.pth'))
+model.eval()
+predictions = []
+true_labels = []
+with torch.no_grad():
+    for batch in val_loader:
+        inputs = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
+        labels = batch['labels'].to(device)
+        outputs = model(**inputs)
+        preds = torch.argmax(outputs.logits, dim=1)
+        predictions.extend(preds.cpu().numpy())
+        true_labels.extend(labels.cpu().numpy())
+
+val_accuracy = accuracy_score(true_labels, predictions)
+val_precision = precision_score(true_labels, predictions, average='weighted')
+val_recall = recall_score(true_labels, predictions, average='weighted')
+val_f1 = f1_score(true_labels, predictions, average='weighted')
+
+print(f"Validation Accuracy: {val_accuracy}")
+print(f"Validation Precision: {val_precision}")
+print(f"Validation Recall: {val_recall}")
+print(f"Validation F1 Score: {val_f1}")
