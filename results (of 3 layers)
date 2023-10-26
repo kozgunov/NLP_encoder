@@ -1,0 +1,14 @@
+Epoch 1, Loss: 0.8278260770126583
+Validation Accuracy: 0.6273442226255294
+Epoch 2, Loss: 0.6755103880433678
+Validation Accuracy: 0.6890502117362372
+Epoch 3, Loss: 0.5708415316014653
+Validation Accuracy: 0.7114337568058077
+Validation Accuracy: 0.7114337568058077
+Validation Precision: 0.7159716929173856
+Validation Recall: 0.7114337568058077
+Validation F1 Score: 0.7094773739769192
+
+
+# loss decreased from 0.82 to 0.57 (-25)
+# accuracy increased from 0.62 to 0.71 (+9)
