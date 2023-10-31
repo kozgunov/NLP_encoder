@@ -1,1 +1,187 @@
+import json
+import torch
+from sklearn.model_selection import train_test_split
+from transformers import BertTokenizer, BertForSequenceClassification, AdamW, DistilBertTokenizer, DistilBertForSequenceClassification,  get_linear_schedule_with_warmup
+from torch.utils.data import DataLoader, Dataset
+from torch.optim import AdamW
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score, matthews_corrcoef, confusion_matrix, classification_report
+import numpy as np
+import matplotlib.pyplot as plt
+from torch.cuda.amp import GradScaler, autocast
+
+
+
+print("load dataset")
+# load dataset
+with open('train.json', 'r', encoding='utf-8') as file:
+    data = json.load(file)
+
+print("preprocess dataset")
+# preprocess dataset
+texts = [item['text'] for item in data]
+labels = [item['sentiment'] for item in data]
+label_dict = {'positive': 0, 'neutral': 1, 'negative': 2}
+labels = [label_dict[label] for label in labels]
+
+print("split dataset")
+# split dataset
+train_texts, val_texts, train_labels, val_labels = train_test_split(texts, labels, test_size=0.2, random_state=42)
+
+print("tokenization")
+# tokenization
+tokenizer = DistilBertTokenizer.from_pretrained('bert-base-multilingual-cased') # DistilBertTokenizer instead of BertTokenizer, because it's smaller and faster working
+train_encodings = tokenizer(train_texts, truncation=True, padding=True, max_length=128) # 512->128 for time optimizing
+val_encodings = tokenizer(val_texts, truncation=True, padding=True, max_length=128) # 512->128 for time optimizing
+
+# create custom dataset
+class SentimentDataset(Dataset):
+    def __init__(self, encodings, labels):
+        self.encodings = encodings
+        self.labels = labels
+
+    def __getitem__(self, idx):
+        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+        item['labels'] = torch.tensor(self.labels[idx])
+        return item
+
+    def __len__(self):
+        return len(self.labels)
+
+
+train_dataset = SentimentDataset(train_encodings, train_labels)
+val_dataset = SentimentDataset(val_encodings, val_labels)
+
+
+print("loaded pre-trained BERT-model")
+# load pre-trained BERT model
+model = DistilBertForSequenceClassification.from_pretrained('distilbert-base-multilingual-cased', num_labels=3)  #smaller and faster working
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+
+print("BERT-model")
+# consturction fine-tune BERT model
+train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=8)
+
+
+optimizer = AdamW(model.parameters(), lr=1e-5)
+scaler = GradScaler()  # for mixed precision training
+
+print("training\n")
+# training
+num_epochs = 3 # we can use 10 epochs
+best_accuracy = 0
+for epoch in range(num_epochs):
+    model.train()
+    total_loss = 0
+    for batch in train_loader:
+        optimizer.zero_grad()
+        inputs = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
+        labels = batch['labels'].to(device)
+        outputs = model(**inputs, labels=labels)
+        loss = outputs.loss
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    print(f"Epoch {epoch + 1}, Loss: {total_loss / len(train_loader)}")
+
+    print("mixed precision training") # it allows us to take 16-bit floating point, 32-bit floating point & speed us up
+    # mixed precision training
+    with autocast():
+        outputs = model(**inputs, labels=labels)
+        loss = outputs.loss
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+    total_loss += loss.item()
+
+    print("validation loop")
+    # validation loop
+    model.eval()
+    predictions = []
+    true_labels = []
+    with torch.no_grad():
+        for batch in val_loader:
+            inputs = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
+            labels = batch['labels'].to(device)
+            outputs = model(**inputs)
+            preds = torch.argmax(outputs.logits, dim=1)
+            predictions.extend(preds.cpu().numpy())
+            true_labels.extend(labels.cpu().numpy())
+
+    print("confusion_matrix\n")
+    # confusion matrix
+    cm = confusion_matrix(true_labels, predictions)
+
+    fig, ax = plt.subplots()
+    cax = ax.matshow(cm)
+    plt.title('Confusion Matrix')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.colorbar(cax)
+    plt.show()
+    # analyze incorrect predictions
+    incorrect_predictions = np.where(np.array(true_labels) != np.array(predictions))[0]
+    for index in incorrect_predictions[:100]:  # check first 100 incorrect predictions
+        print(f"Text: {val_texts[index]}")
+        print(f"True Label: {true_labels[index]}")
+        print(f"Predicted Label: {predictions[index]}\n")
+
+    #current metrics
+    print("current_metrics\n")
+    accuracy = accuracy_score(true_labels, predictions)
+    if accuracy > best_accuracy:
+        best_accuracy = accuracy
+        torch.save(model.state_dict(), 'best_model.pth') # it'd be the most important metric (by default)
+
+    precision = precision_score(true_labels, predictions, average='macro')  # or use average='weighted'
+    recall = recall_score(true_labels, predictions, average='macro')  # or use average='weighted'
+    f1_score = f1_score(true_labels, predictions, average='macro')  # or use average='weighted'
+
+    print(f"Accuracy: {accuracy}")
+    print(f"Precision: {precision}")
+    print(f"Recall: {recall}")
+    print(f"F1 Score: {f1_score}")
+
+# evaluation on best model
+print("evaluation\n")
+model.load_state_dict(torch.load('best_model.pth'))
+model.eval()
+predictions = []
+true_labels = []
+with torch.no_grad():
+    for batch in val_loader:
+        inputs = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
+        labels = batch['labels'].to(device)
+        outputs = model(**inputs)
+        preds = torch.argmax(outputs.logits, dim=1)
+        predictions.extend(preds.cpu().numpy())
+        true_labels.extend(labels.cpu().numpy())
+
+
+
+# metrics
+print("metrics\n")
+# macro - compute performance of every metric separately - find the disbalanced weights of every metrics
+# weighted - compute performance of every metric - find the mean value of weights by suppors
+accuracy = accuracy_score(true_labels, predictions)
+precision = precision_score(true_labels, predictions, average='macro') # or use average='weighted'
+recall = recall_score(true_labels, predictions, average='macro') # or use average='weighted'
+f1_score = f1_score(true_labels, predictions, average='macro') # or use average='weighted'
+
+# mcc = matthews_corrcoef(true_labels, predictions) # correlation coefficient between the observed and predicted binary classifications
+# roc_auc = roc_auc_score(true_labels, predictions, average='macro', multi_class='ovo')  # Area Under the Receiver Operating Characteristic curve for binary classification
+# avg_precision = average_precision_score(true_labels, predictions)  # AUC-PR curve is a performance measurement for binary classification problems
+
+print(f"Accuracy: {accuracy}")
+print(f"Precision: {precision}")
+print(f"Recall: {recall}")
+print(f"F1 Score: {f1_score}")
+# print(f"roc_auc: {roc_auc}")
+# print(f"avg_precision: {avg_precision}")
+# print(f"MCC: {mcc}")
+
+
+
+
  
