@@ -1,6 +1,56 @@
-Epoch 1, Loss: 0.8366981849866213
-Accuracy: 0.6430732002419842
-Precision: 0.6469869743521312
-Recall: 0.6261488136070009
-F1 Score: 0.6330258435521593
-Epoch 2, Loss: 0.694311094024907
+ time complexity
+tokenization: O(N⋅L), where L-average length , N-number of texts
+model training:O(E*D/B), where E-epochs, B-batch size, D-data points
+
+space complexity: 
+Model Parameters: O(BERT)
+Dataset Storage: O(S), where S-size of storage of the data
+
+Metrics' performance:
+
+Epoch 1 finished, Loss: 0.8432100061777134
+Accuracy: 0.6152450090744102
+Precision: 0.6389350654088575
+Recall: 0.5895143608412651
+F1 Score: 0.5950710726300277
+
+Epoch 2 finished, Loss: 0.6978379248996863
+Accuracy: 0.6648517846339987
+Precision: 0.6653015812997988
+Recall: 0.6310361906767485
+F1 Score: 0.6443973949689494
+
+Epoch 3 finished, Loss: 0.5886737948490514
+Accuracy: 0.6654567453115547
+Precision: 0.7154027404775309
+Recall: 0.5891150855296227
+F1 Score: 0.6183572474584937
+
+Epoch 4 finished, Loss: 0.4669505987982243
+Accuracy: 0.647912885662432
+Precision: 0.6382064573144067
+Recall: 0.6817901227292263
+F1 Score: 0.6453098387538777
+
+Epoch 5 finished, Loss: 0.39062702501471636
+Accuracy: 0.6491228070175439
+Precision: 0.6571671108701871
+Recall: 0.6652967835602502
+F1 Score: 0.65069470385429
+
+exmaple of function "sentence2mood"
+1. Я не люблю курить.
+Sentiment: negative
+2. Отрицательные предложения в русском языке представляют собой конструкции, в которых выражается отрицание или отрицательное значение действия или состояния. Они играют важную роль в коммуникации, позволяя выражать отрицательное отношение, отрицательные факты, запреты, отказы и многое другое.
+Sentiment: neutral
+3. Я не хочу есть.
+Sentiment: negative
+4. Он никогда не приходит вовремя.
+Sentiment: negative
+5. Мы не смогли решить эту задачу.
+Sentiment: neutral
+
+
+
+
+
