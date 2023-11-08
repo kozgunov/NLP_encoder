@@ -3,16 +3,19 @@ import re
 import device
 import torch
 from sklearn.model_selection import train_test_split
-from transformers import BertTokenizer, BertForSequenceClassification, AdamW, get_linear_schedule_with_warmup, BertConfig
+from transformers import BertTokenizer
+from transformers import BertForSequenceClassification
+#from transformers import AdamW
+from transformers import get_linear_schedule_with_warmup
+from transformers import BertConfig
 #from transformers import  DistilBertTokenizer, DistilBertForSequenceClassification
 from torch.utils.data import DataLoader, Dataset
-#from torch.optim import AdamW
+from torch.optim import AdamW
 from torch.nn.functional import softmax
 from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score, average_precision_score,
                              matthews_corrcoef, confusion_matrix, classification_report,
                              cohen_kappa_score, hamming_loss, balanced_accuracy_score, log_loss, roc_auc_score,
                              brier_score_loss, top_k_accuracy_score)
-from sklearn.utils.class_weight import compute_class_weight
 from imblearn.over_sampling import SMOTE
 import numpy as np
 import matplotlib.pyplot as plt
@@ -21,7 +24,9 @@ from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
-
+from sklearn.utils import class_weight
+from sklearn.feature_extraction.text import TfidfVectorizer
+import seaborn as sns
 
 print("load dataset\n")
 # load dataset
@@ -40,13 +45,25 @@ print("split dataset\n")
 train_texts, val_texts, train_labels, val_labels = train_test_split(texts, labels, test_size=0.2, random_state=42)
 
 # Calculate class weights
-class_weights = compute_class_weight('balanced', np.unique(train_labels), train_labels)
-weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(device)
+unique_classes = np.unique(train_labels)
+weights = class_weight.compute_class_weight(class_weight='balanced', classes=unique_classes, y=train_labels)
+class_weights = dict(zip(unique_classes, weights))
+print(class_weights)
+#class_weights = compute_class_weight('balanced', np.unique(train_labels), train_labels)
+#weights_tensor = torch.tensor(class_weights, dtype=torch.float).to(device)
+class_weights_list = [class_weights[key] for key in sorted(class_weights.keys())]
+weights_tensor = torch.tensor(class_weights_list, dtype=torch.float)
+#weights_tensor = weights_tensor.to(device)
 
 # Apply resampling techniques to the training data
+vectorizer = TfidfVectorizer()
+X_train_vect = vectorizer.fit_transform(train_texts)
 sm = SMOTE(random_state=42)
-train_texts_resampled, train_labels_resampled = sm.fit_resample(train_texts, train_labels)
+X_res, y_res = sm.fit_resample(X_train_vect, train_labels)
+#print(f'X_res{X_res}')
+#print(f'y_res{y_res}')
 
+print("clean the text")
 def clean_text(text): # removing the links, transforming to lower register, removing the symbols
     text = re.sub(r'http\S+', ' ', text)
     text = re.sub(r'[^a-zA-Zа-яА-Я0-9\s]', ' ', text)
@@ -58,11 +75,17 @@ for text in train_texts:
 for text in val_texts:
     val_texts=clean_text(text)
 
-def add_context_embedding(texts, additional_context): #enlarging the context
+print("context embedding")
+def add_context_embedding(texts, contexts):
     new_texts = []
-    for text, context in zip(texts, additional_context):
-        new_text = context['before'] + text + context['after'] # compose last&next sentences to the current
-        new_texts.append(new_text)
+    for i, text in enumerate(texts):
+        context = contexts.get(i)  # Use .get() to return None if the key is not found
+        if context is not None:
+            new_text = context['before'] + text + context['after']
+            new_texts.append(new_text)
+        else:
+            # Handle the case where context is not found
+            new_texts.append(text)
     return new_texts
 
 for _ in train_texts:
@@ -73,7 +96,7 @@ for _ in val_texts:
 train_texts_with_context = add_context_embedding(train_texts, additional_context_train)
 val_texts_with_context = add_context_embedding(val_texts, additional_context_val)
 
-
+print("dropout")
 config = BertConfig.from_pretrained('bert-base-multilingual-cased')
 config.hidden_dropout_prob = 0.2  # set 20% dropout
 config.attention_probs_dropout_prob = 0.2  # attention probabilities
@@ -91,8 +114,9 @@ try:
 except Exception as e:
     print(f"An error occurred for tokenization: {e}")
 
-loss_func = torch.nn.CrossEntropyLoss(weight=weights_tensor)
 
+loss_fun = torch.nn.CrossEntropyLoss(weight=weights_tensor)
+print(loss_fun)
 
 # create custom dataset
 class SentimentDataset(Dataset):
@@ -101,13 +125,16 @@ class SentimentDataset(Dataset):
         self.labels = labels
 
     def __getitem__(self, idx):
+        if idx >= len(self.encodings['input_ids']):  # assuming 'input_ids' is a key in encodings
+            raise IndexError(
+                f"Index {idx} is out of bounds for this dataset with length {len(self.encodings['input_ids'])}")
+        input_ids = torch.tensor(self.encodings['input_ids'][idx]).unsqueeze(0)  # Add a batch dimension
+        attention_mask = torch.tensor(self.encodings['attention_mask'][idx]).unsqueeze(0)  # Add a batch dimension
         item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
-        item['labels'] = torch.tensor(self.labels[idx])
         return item
 
     def __len__(self):
-        return len(self.labels)
-
+        return len(self.encodings['input_ids'])  # or the length of any other primary list/array
 
 
 try:
@@ -137,6 +164,12 @@ try:
 except Exception as e:
     print(f"An error appeared during fine-tuning the BERT-model: {e}")
 
+for batch in train_loader:
+    # Print the shapes of the inputs to ensure they are correct
+    print("Input IDs shape:", batch['input_ids'].shape)
+    print("Attention Mask shape:", batch['attention_mask'].shape)
+
+
 model_path = None
 tokenizer_path = None
 
@@ -153,12 +186,20 @@ for epoch in range(num_epochs):
     except Exception as e:
         print(f"An error appeared during traning the BERT-model in {epoch} epoch: {e}")
     total_loss = 0
-    for batch in train_loader:
+    print(f"Total batches: {len(train_loader)}")
+    for batch_index, batch in enumerate(train_loader):
+        print(f"Processing batch {batch_index}")
         optimizer.zero_grad()
+        for key, value in batch.items():
+            print(f"{key} shape: {value.shape}")  # This should print (batch_size, sequence_length) for input_ids and attention_mask
         #inputs = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
         #labels = batch['labels'].to(device)
         #outputs = model(**inputs, labels=labels)
-        outputs = model(**batch)
+        try:
+            outputs = model(**batch)
+        except Exception as e:
+            print("Error during model forward pass:", e)
+            break
         loss = outputs.loss
         loss.backward()
         optimizer.step()
@@ -207,11 +248,15 @@ for epoch in range(num_epochs):
         cm = confusion_matrix(true_labels, predictions)
         fig, ax = plt.subplots()
         cax = ax.matshow(cm)
+        plt.colorbar(cax)
+        plt.figure(figsize=(10, 7))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Label1', 'Label2'],
+                    yticklabels=['Label1', 'Label2'])
         plt.title('Confusion Matrix')
         plt.xlabel('Predicted')
         plt.ylabel('True')
-        plt.colorbar(cax)
         plt.show()
+
     except Exception as e:
         print(f"An error appeared during consturction confusion matrix: {e}")
     # analyze incorrect predictions
@@ -350,43 +395,6 @@ print(f"top_k_accuracy_score: {top_k_acc}")
 print(f'matthews_corrcoef: {mcc}')
 
 
-'''
-
-def interactive_sentiment_analysis():
-    # load trained model and tokenizer
-    model = BertForSequenceClassification.from_pretrained(f'C:/Users/user/pythonProject/{model_path}')
-    tokenizer = BertTokenizer.from_pretrained(f'C:/Users/user/pythonProject/{tokenizer_path}')
-
-    while True: # interactive loop
-        user_input = input("input the sentence (or 'exit' to leave): ") # end
-        if user_input.lower() == 'exit':
-            break
-
-        encoding = tokenizer(user_input, truncation=True, padding=True, max_length=1023, return_tensors='pt') # 1023 is max length of sentence
-
-        with torch.no_grad():
-            outputs = model(**encoding)
-        preds = torch.argmax(outputs.logits, dim=1).item() # model's prediction
-
-        sentiment_label = {0: 'positive', 1: 'neutral', 2: 'negative'}
-        sentiment = sentiment_label[preds] # convert the reply
-
-        print(f"Sentiment: {sentiment}")
-
-# running
-if __name__ == "__main__":
-    interactive_sentiment_analysis()
-
-
-#model, which get text as input and response the mood of it (0,1,2)
-def get_sentiment(text):
-    encoding = tokenizer(text, truncation=True, padding=True, max_length=1023, return_tensors='pt') # 1024+ were cut off
-    with torch.no_grad(): # turn the gradient response off
-        outputs = model(**encoding)
-        preds = torch.argmax(outputs.logits, dim=1).item() # use softmax for output
-    sentiment_dict = {0: 'positive', 1: 'neutral', 2: 'negative'}
-    return sentiment_dict[preds]
-'''
 
 
 
