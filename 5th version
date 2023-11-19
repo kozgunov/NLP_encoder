@@ -1,0 +1,376 @@
+import json
+import re
+import device
+import torch
+from sklearn.model_selection import train_test_split
+from transformers import BertTokenizer
+from transformers import BertForSequenceClassification
+from torch.utils.data import DataLoader, Dataset
+from torch.optim import AdamW
+from sklearn.metrics import (accuracy_score, f1_score, confusion_matrix, balanced_accuracy_score, log_loss,)
+from imblearn.over_sampling import SMOTE
+import numpy as np
+import matplotlib.pyplot as plt
+from torch.cuda.amp import GradScaler, autocast
+from datetime import datetime
+from sklearn.utils import class_weight
+from sklearn.feature_extraction.text import TfidfVectorizer
+import seaborn as sns
+from sklearn.model_selection import KFold
+from torch.nn.utils import prune
+#from transformers import BertConfig
+#from sklearn.metrics import (matthews_corrcoef, cohen_kappa_score, hamming_loss, roc_auc_score, top_k_accuracy_score)
+#from transformers import get_linear_schedule_with_warmup
+#from sklearn.ensemble import RandomForestClassifier
+#from sklearn.preprocessing import StandardScaler
+#from sklearn.pipeline import make_pipeline
+#from torch.nn.functional import softmax
+#from transformers import  DistilBertTokenizer, DistilBertForSequenceClassification
+#from transformers import AdamW
+
+class SentimentDataset(Dataset):
+    def __init__(self, encodings, labels):
+        self.encodings = encodings
+        self.labels = labels
+
+    '''
+    def __getitem__(self, idx):
+        if idx >= len(self.encodings['input_ids']):  # assuming 'input_ids' is a key in encodings
+            raise IndexError(
+                f"Index {idx} is out of bounds for this dataset with length {len(self.encodings['input_ids'])}")
+        input_ids = torch.tensor(self.encodings['input_ids'][idx]).unsqueeze(0)  # Add a batch dimension
+        attention_mask = torch.tensor(self.encodings['attention_mask'][idx]).unsqueeze(0)  # Add a batch dimension
+        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+        return item
+    '''
+    def __getitem__(self, idx):
+        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+        item['labels'] = torch.tensor(self.labels[idx])
+        return item
+
+    def __len__(self):
+        return len(self.labels)
+
+print("load dataset\n")
+with open('train.json', 'r', encoding='utf-8') as file:
+    data = json.load(file)
+
+print("preprocess dataset\n")
+texts = [item['text'] for item in data]
+labels = [item['sentiment'] for item in data]
+label_dict = {'positive': 0, 'neutral': 1, 'negative': 2}
+labels = [label_dict[label] for label in labels]
+
+
+kf = KFold(n_splits=4) # 25/75 - change.. 25/75......
+fold_results = []
+print("split dataset 75/25\n")
+for fold, (train_index, val_index) in enumerate(kf.split(data)):
+    train_data = [data[i] for i in train_index]
+    val_data = [data[i] for i in val_index]
+    model = BertForSequenceClassification.from_pretrained('bert-base-uncased')
+    train_texts, val_texts, train_labels, val_labels = train_test_split(texts, labels, test_size=0.25, random_state=42)
+
+    # Calculate class weights
+    unique_classes = np.unique(train_labels)
+    weights = class_weight.compute_class_weight(class_weight='balanced', classes=unique_classes, y=train_labels)
+    class_weights = dict(zip(unique_classes, weights))
+    print(class_weights)
+    #class_weights = compute_class_weight('balanced', np.unique(train_labels), train_labels)
+    class_weights_list = [class_weights[key] for key in sorted(class_weights.keys())]
+    weights_tensor = torch.tensor(class_weights_list, dtype=torch.float)
+
+    # apply resampling techniques to the training data
+    vectorizer = TfidfVectorizer()
+    X_train_vect = vectorizer.fit_transform(train_texts)
+    sm = SMOTE(random_state=42)
+    X_res, y_res = sm.fit_resample(X_train_vect, train_labels)
+    #print(f'X_res{X_res}')
+    #print(f'y_res{y_res}')
+
+    print("purify the text")
+    def clean_text(text): # removing the links, transforming to lower register, removing the symbols
+        text = re.sub(r'http\S+', ' ', text)
+        text = re.sub(r'[^a-zA-Zа-яА-Я0-9\s]', ' ', text)
+        #text = re.sub(r'\s+', ' ', text).strip() - only if we wanna remove whole symbols
+        return text.lower()
+    # transforming my text
+    cleaned_train_texts = [clean_text(text) for text in train_texts]
+    cleaned_val_texts = [clean_text(text) for text in val_texts]
+
+    print("context embedding")
+    def add_context_embedding(texts, contexts):
+        new_texts = []
+        for i, text in enumerate(texts):
+            context = contexts.get(i)  # return None if the key is not found
+            if context is not None:
+                new_text = context['before'] + text + context['after']
+                new_texts.append(new_text)
+            else:
+                new_texts.append(text) # handle the case where context is not found
+        return new_texts
+
+    for _ in train_texts:
+        additional_context_train = {'before': 'Previous sentence.', 'after': 'Next sentence.'}
+    for _ in val_texts:
+        additional_context_val = {'before': 'Previous sentence.', 'after': 'Next sentence.'}
+    train_texts_with_context = add_context_embedding(train_texts, additional_context_train)
+    val_texts_with_context = add_context_embedding(val_texts, additional_context_val)
+
+    try:
+        print("tokenization\n")
+        tokenizer = BertTokenizer.from_pretrained(
+            'bert-base-multilingual-cased')  # DistilBertTokenizer instead of BertTokenizer, because it's smaller and faster working
+        train_encodings = tokenizer(cleaned_train_texts, truncation=True, padding='max_length',
+                                    max_length=256)  # 512->256 for time optimizing
+        val_encodings = tokenizer(cleaned_val_texts, truncation=True, padding='max_length', max_length=256)  # 512->256 for time optimizing
+    except Exception as e:
+        print(f"An error occurred for tokenization: {e}")
+
+    loss_fun = torch.nn.CrossEntropyLoss(weight=weights_tensor)
+    print(f"loss function in the beginning: {loss_fun}")
+
+    try:
+        train_dataset = SentimentDataset(train_encodings, train_labels)
+        val_dataset = SentimentDataset(val_encodings, val_labels)
+    except Exception as e:
+        print(f"An error occurred for SentimentDataset: {e}")
+
+    try:
+        print("loaded pre-trained BERT-model\n")
+        model = BertForSequenceClassification.from_pretrained('bert-base-multilingual-cased', num_labels=3)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # it's not powerful computation, so relied on CPU
+        model.to(device)
+    except Exception as e:
+        print(f"An error occurred for model pre-training: {e}")
+
+    try:
+        print("BERT-model\n")
+        train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4, pin_memory=True) # batch size changed 8->16 for generalization of the model
+        val_loader = DataLoader(val_dataset, batch_size=16)
+        optimizer = AdamW(model.parameters(), lr=6e-5, eps=1e-8) # l2-regularization: changed for speed up the training 1. learning rate, 2. exclude division by zero, 3. regularization via penalty
+        scaler = GradScaler()  # for mixed training
+    except Exception as e:
+        print(f"An error appeared during fine-tuning the BERT-model: {e}")
+
+    print("training\n")
+    new_learning_rate = None
+    model_path = None # for saving
+    tokenizer_path = None # for saving
+    best_val_loss = float('inf') # it'll stop, when the validation loss will start increasing
+    early_stopping_counter = 0
+    early_stopping_threshold = 3 # we can guarantee, that 3 epochs will occur
+    num_epochs = 2
+    best_accuracy = 0
+    for epoch in range(num_epochs):
+        try:
+            model.train()
+        except Exception as e:
+            print(f"An error appeared during traning the BERT-model in {epoch} epoch: {e}")
+        total_loss = 0
+        print(f"Total batches: {len(train_loader)}")
+        for batch_index, batch in enumerate(train_loader):
+            #print(f"Processing batch {batch_index}")
+            #print("Input IDs shape:", batch['input_ids'].shape)  # Should be (batch_size, sequence_length)
+            #print("Attention Mask shape:", batch['attention_mask'].shape)  # Should be (batch_size, sequence_length)
+            optimizer.zero_grad()
+            for key, value in batch.items():
+                print(f"{key} shape: {value.shape}")  # This should print (batch_size, sequence_length) for input_ids and attention_mask
+            #inputs = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
+            #labels = batch['labels'].to(device)
+            #outputs = model(**inputs, labels=labels)
+            try:
+                outputs = model(**batch)
+            except Exception as e:
+                print("Error during model forward pass:", e)
+                break
+            loss = outputs.loss
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        average_training_loss = total_loss/len(train_loader)
+
+        print("mixed precision training\n") # it allows us to take 16-bit floating point, 32-bit floating point & speed us up
+        for batch in train_loader:
+            with autocast():
+                #outputs = model(**inputs, labels=labels)
+                outputs = model(**batch)
+                loss = outputs.loss
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+            total_loss += loss.item()
+
+        print("validation loop\n")
+        print("embedding_1")
+        model.eval()
+        total_val_loss = 0
+        predictions = []
+        true_labels = []
+        probabilities = []
+        with torch.no_grad():
+            for batch in val_loader:
+                #inputs = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
+                #labels = batch['labels'].to(device)
+                #outputs = model(**inputs)
+                #preds = torch.argmax(outputs.logits, dim=1)
+                #predictions.extend(preds.cpu().numpy())
+                #true_labels.extend(labels.cpu().numpy())
+                #logits = outputs.logits
+                #probs = softmax(logits, dim=1)
+                #probabilities.extend(probs.cpu().numpy())
+                outputs = model(**batch)
+                loss = outputs.loss
+                total_val_loss += loss.item()
+        current_val_loss = total_val_loss / len(val_loader)
+
+        print("embedding_2, it's empty, cause I'm not sure it will work correctly")
+        '''
+        with torch.no_grad():
+            outputs = model(**inputs)
+        token_embeddings = outputs.last_hidden_state
+        pooled_embeddings = outputs.pooler_output
+        token_embeddings_np = token_embeddings.detach().cpu().numpy()
+        pooled_embeddings_np = pooled_embeddings.detach().cpu().numpy()
+        '''
+        print("confusion_matrix\n")
+        try:
+            cm = confusion_matrix(true_labels, predictions)
+            fig, ax = plt.subplots()
+            cax = ax.matshow(cm)
+            plt.colorbar(cax)
+            plt.figure(figsize=(10, 7))
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Label1', 'Label2'],
+                        yticklabels=['Label1', 'Label2'])
+            plt.title('Confusion Matrix')
+            plt.xlabel('Predicted')
+            plt.ylabel('True')
+            plt.show()
+
+        except Exception as e:
+            print(f"An error appeared during consturction confusion matrix: {e}")
+        incorrect_predictions = np.where(np.array(true_labels) != np.array(predictions))[0]
+        #for index in incorrect_predictions[5:]:  # check last 5 incorrect predictions
+            #print(f"Text: {val_texts[index]}") - sentences
+            #print(f"True Label: {true_labels[index]}")
+            #print(f"Predicted Label: {predictions[index]}\n")
+        correct_predictions = np.where(np.array(true_labels) == np.array(predictions))[0]
+        #for index in correct_predictions[5:]:  # check first 5 incorrect predictions
+            #print(f"Text: {val_texts[index]}") # sentences
+            #print(f"True Label: {true_labels[index]}")
+            #print(f"Predicted Label: {predictions[index]}\n")
+
+
+        #current metrics
+        print("current_metrics\n")
+        accuracy = accuracy_score(true_labels, predictions)
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            torch.save(model.state_dict(), 'best_model.pth') # it'd be the most important metric (by default)
+
+        f1 = f1_score(true_labels, predictions, average='macro')  # or use average='weighted'
+        #kappa = cohen_kappa_score(true_labels, predictions)
+        #hamm_loss = hamming_loss(true_labels, predictions)
+        bal_acc = balanced_accuracy_score(true_labels, predictions)
+        #mcc = matthews_corrcoef(true_labels,
+        #                        predictions)  # correlation coefficient between the observed and predicted binary classifications
+        #roc_auc = roc_auc_score(true_labels, predictions, average='macro',
+        #                        multi_class='ovo')  # Area Under the Receiver Operating Characteristic curve for binary classification
+
+        log_loss_value = log_loss(true_labels, probabilities)
+        #ovo_auc = roc_auc_score(true_labels, probabilities, multi_class='ovo')
+        #ova_auc = roc_auc_score(true_labels, probabilities, multi_class='ovr')
+        #k = 3 # 3 classes
+        #top_k_acc = top_k_accuracy_score(true_labels, probabilities, k=k)
+
+        print(f"Accuracy: {accuracy}")
+        print(f"F1 Score: {f1}")
+        #print(f"cohen_kappa_score: {kappa}")
+        #print(f"hamming_loss: {hamm_loss}")
+        #print(f"balanced_accuracy_score: {bal_acc}")
+        #print(f"roc_auc_score: {roc_auc}")
+        #print(f"log_loss : {log_loss_value}")
+        #print(f"roc_auc_score : {ovo_auc}")
+        #print(f"roc_auc_score : {ova_auc}")
+        #print(f"top_k_accuracy_score: {top_k_acc}")
+        #print(f'matthews_corrcoef: {mcc}')
+        if len(train_loader) != 0:
+            print(f"Epoch {epoch + 1} finished, Loss: {total_loss / len(train_loader)}")
+        else:
+            print(f"Epoch {epoch + 1} finished, Loss: Undefined DIVISION BY  ZERO")
+
+        # Check for improvement
+        if current_val_loss < best_val_loss:
+            best_val_loss = current_val_loss
+            early_stopping_counter = 0
+            #torch.save(model.state_dict(), 'best_model_state.bin') # save the model temprorary
+        else: # occur, if we stopped development
+            early_stopping_counter += 1
+            print(f"Epoch {epoch + 1}/{num_epochs} - Training Loss: {average_training_loss:.4f}, Validation Loss: {current_val_loss:.4f}")
+
+            if early_stopping_counter > early_stopping_threshold:
+                for param_group in optimizer.param_groups:
+                    new_learning_rate = max(param_group['lr'] - 1e-5, 1e-6)  #delta will improve the model to the minimal
+                    param_group['lr'] = new_learning_rate
+                early_stopping_counter = 0  # reset counter
+                print(f"No improvement for {epoch} consecutive epochs => decrease l_r")
+                if new_learning_rate == 1e-6:
+                    break
+
+
+        if epoch == num_epochs - 1: # here we'll save PRE-BEST RESULTS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            folder_name = datetime.now().strftime('%Y-%m-%d_%H-%M-%S') # generating new folder
+            model_path = f'saved_models/{folder_name}/model'
+            tokenizer_path = f'saved_models/{folder_name}/tokenizer'
+            print("model&tokenizer saved\n")
+            model.save_pretrained(f'C:/Users/user/pythonProject/{model_path}') # save the model
+            tokenizer.save_pretrained(f'C:/Users/user/pythonProject/{tokenizer_path}') # save the tokenizer
+
+    # if we saved temprorary results, we can open them out here
+    #best_model = BertForSequenceClassification.from_pretrained('bert-base-multilingual-cased')
+    #best_model.load_state_dict(torch.load('best_model_state.bin'))
+
+    # evaluation on best model
+    print("evaluation\n")
+    model.load_state_dict(torch.load('best_model.pth'))
+    model.eval()
+    predictions = []
+    true_labels = []
+    with torch.no_grad():
+        for batch in val_loader:
+            inputs = {k: v.to(device) for k, v in batch.items() if k != 'labels'}
+            labels = batch['labels'].to(device)
+            outputs = model(**inputs)
+            preds = torch.argmax(outputs.logits, dim=1)
+            predictions.extend(preds.cpu().numpy())
+            true_labels.extend(labels.cpu().numpy())
+
+
+
+    # metrics
+    print("metrics\n")
+    # macro - compute performance of every metric separately - find the disbalanced weights of every metrics
+    # weighted - compute performance of every metric - find the mean value of weights by suppors
+    accuracy = accuracy_score(true_labels, predictions)
+    f1 = f1_score(true_labels, predictions, average='macro') # or use average='weighted'
+    #mcc = matthews_corrcoef(true_labels, predictions) # correlation coefficient between the observed and predicted binary classifications
+    #roc_auc = roc_auc_score(true_labels, predictions, average='macro', multi_class='ovo')  # Area Under the Receiver Operating Characteristic curve for binary classification
+
+    print("final results")
+    print(f"Accuracy: {accuracy}")
+    print(f"F1 Score: {f1}")
+    print(f"log_loss : {log_loss_value}")
+    print(f"balanced_accuracy_score: {bal_acc}")
+    #print(f"cohen_kappa_score: {kappa}")
+    #print(f"hamming_loss: {hamm_loss}")
+    #print(f"roc_auc_score: {roc_auc}")
+    #print(f"roc_auc_score : {ovo_auc}")
+    #print(f"roc_auc_score : {ova_auc}")
+    #print(f"top_k_accuracy_score: {top_k_acc}")
+    #print(f'matthews_corrcoef: {mcc}')
+    fold_results.append(accuracy)
+    fold_results.append(f1)
+    fold_results.append(log_loss_value)
+    fold_results.append(bal_acc)
+
