@@ -1,0 +1,6 @@
+True labels or probabilities are empty or incorrect.
+Accuracy: nan
+F1 Score: nan
+Epoch 1 finished, Loss: 1.0304894831377207
+Error during model forward pass: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu! (when checking argument for argument index in method wrapper_CUDA__index_select)
+mixed precision training
