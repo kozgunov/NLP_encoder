@@ -12,15 +12,8 @@
 Scan this QR code to start a conversation with our Telegram bot:
 ![Telegram Bot QR Code](path-to-qr-code-image-in-your-repository)
 
-
 ## Project Description
 This project applies a BERT model to a sentimental analysis problem in NLP. It includes the full pipeline from data preprocessing, model training, to performance evaluation via several metrics.
-
-
-## Coauthors
-- [Coauthor Name](https://github.com/coauthorusername) - Details about contribution
-- [Another Coauthor](personal-website-link) - Details about contribution
-
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
