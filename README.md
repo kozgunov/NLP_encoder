@@ -23,6 +23,7 @@ To set up this project:
 Run the main script to train and evaluate the model:
 
 
+
 ## Features
 - BERT-based sequence classification
 - Customizable model parameters
@@ -32,13 +33,13 @@ Run the main script to train and evaluate the model:
 Contributions to this project are welcome. Please submit pull requests or open an issue for changes you would like to make.
 
 ## License
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Contact
-For any queries, please open an issue on the GitHub repository.
+For any queries, please open an issue on the [GitHub repository](https://github.com/yourusername/NLP-BERT-Sequence-Classification/issues).
 
 ## Acknowledgments
-- Transformers library by Hugging Face
-- PyTorch community
+- [Transformers library by Hugging Face](https://huggingface.co/transformers/)
+- [PyTorch community](https://pytorch.org/)
 
 
