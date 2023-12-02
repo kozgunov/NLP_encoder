@@ -36,7 +36,7 @@ Contributions to this project are welcome. Please submit pull requests or open a
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Contact
-For any queries, please open an issue on the [GitHub repository](https://github.com/yourusername/NLP-BERT-Sequence-Classification/issues).
+For any queries, please open an issue on the [GitHub repository](https://github.com/kozgunov/NLP_encoder/blob/main/5th%20version).
 
 ## Acknowledgments
 - [Transformers library by Hugging Face](https://huggingface.co/transformers/)
