@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-orange.svg)](https://github.com/yourusername/NLP-BERT-Sequence-Classification/pulls)
-[![GitHub repository](https://img.shields.io/github.com/kozgunov/NLP_encoder/blob/main/5th%20version)](https://github.com/kozgunov/NLP_encoder/blob/main/5th%20version)
+[![Version 5](https://img.shields.io/github/v/release/yourusername/NLP-BERT-Sequence-Classification)](https://github.com/kozgunov/NLP_encoder/blob/main/5th%20version)
 [![Results](https://img.shields.io/badge/view-results-blue.svg)](link-to-your-results)
 
 
