@@ -1,7 +1,10 @@
-
-
-
 # NLP Sequence Classification with BERT
+
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.8](https://img.shields.io/badge/python-3.8-blue.svg)](https://www.python.org/downloads/release/python-380/)
+[![Contributions welcome](https://img.shields.io/badge/contributions-welcome-orange.svg)](https://github.com/yourusername/NLP-BERT-Sequence-Classification/pulls)
+
 
 ## Project Description
 This project applies a BERT model to a sequence classification task in NLP. It includes the full pipeline from data preprocessing, model training, to performance evaluation.
