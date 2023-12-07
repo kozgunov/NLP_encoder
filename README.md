@@ -34,8 +34,7 @@ Start using ours model with running the main script to train and evaluate the mo
 Contributions to this project are welcome. Please submit pull requests or open an issue for changes you would like to make.
 
 ## Coauthors
-- [Coauthor Valerii Olisenko](https://github.com/) - Valerii Olisenko 
-- [Coauthor Maxim Abramov](https://github.com/) - Maxim Abramov
+- [Coauthor TICS lab](https://github.com/ticslab) - Valerii Olisenko, Maxim Abramov from TICS lab
 
 ## Acknowledgments
 - [Transformers library by Hugging Face](https://huggingface.co/transformers/)
