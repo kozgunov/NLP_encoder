@@ -1,0 +1,9 @@
+function based on my model and tokenizator, which trasnfer inputed text into outputed sentiment.
+
+instruction:
+1. input your text
+2. wait for evaluation
+3. check the replied answer with the following results:
+0 - positive
+1 - neutral
+2 - negative
